@@ -1,8 +1,11 @@
 use std::sync::Arc;
-use vulkano_win;
+
 use vulkano::{
     instance::{Instance, InstanceCreateInfo, InstanceExtensions},
-    VulkanLibrary
+    device::physical::PhysicalDevice,
+    device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags},
+    VulkanLibrary,
+    swapchain::Surface
 };
 
 use winit::{
@@ -11,6 +14,8 @@ use winit::{
     dpi::LogicalSize,
     event::{Event, WindowEvent}
 };
+
+use vulkano_win::VkSurfaceBuild;
 
 const WIDTH:  u32 = 800;
 const HEIGHT: u32 = 600;
@@ -25,38 +30,42 @@ const VALIDATION_LAYERS: &[&str] = &[
 ];
 
 struct HelloTriangleApplication {
-    eloop:      EventLoop<()>,
-    window:     Window,
-    instance:   Arc<Instance>
+    eloop:              EventLoop<()>,
+    window:             Arc<Surface>,
+    device:             Arc<Device>,
+    graphic_queue:      Arc<Queue>
 }
 
 impl HelloTriangleApplication {
     pub fn init() -> Self {
-        let (eloop, window) = Self::init_window();
-        let instance = Self::init_vulkan();
+        let (instance, device, graphic_queue) = Self::init_vulkan();
+        let (eloop, window) = Self::init_window(instance);
 
         Self {
             eloop,
             window,
-            instance
+            device,
+            graphic_queue
         }
     }
 
-    fn init_window() -> (EventLoop<()>, Window) {
-        let eloop  = EventLoop::new().unwrap();
+    fn init_window(instance: Arc<Instance>) -> (EventLoop<()>, Arc<Surface>) {
+        let eloop  = EventLoop::new();
+
         let window = WindowBuilder::new()
             .with_title("Vulkan")
             .with_inner_size(LogicalSize {width: WIDTH, height: HEIGHT})
-            .build(&eloop).unwrap();
+            .build_vk_surface(&eloop, instance)
+            .unwrap();
 
         (eloop, window)
     }
 
-    fn init_vulkan() -> Arc<Instance> {
+    fn init_vulkan() -> (Arc<Instance>, Arc<Device>, Arc<Queue>) {
         let library     = VulkanLibrary::new().unwrap();
         let extensions  = Self::get_required_extensions(&library);
 
-        Instance::new(
+        let instance = Instance::new(
             library,
             InstanceCreateInfo {
                 enumerate_portability:  true,
@@ -66,7 +75,31 @@ impl HelloTriangleApplication {
                                         } else { vec![] },
                 ..Default::default()
             }
-        ).unwrap()
+        ).unwrap();
+
+        let physical_device = instance
+            .enumerate_physical_devices().unwrap()
+            .next().unwrap();
+
+        let queue_family_index = Self::get_queue_family_index(&physical_device).unwrap();
+
+        let mut device = Device::new(
+            physical_device,
+            DeviceCreateInfo {
+                enabled_extensions: DeviceExtensions::empty(),
+                enabled_features: Features::empty(),
+                queue_create_infos: vec![QueueCreateInfo {
+                    queue_family_index: queue_family_index as u32,
+                    queues: vec![1.0],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }
+        ).unwrap();
+
+        let graphic_queue = device.1.next().unwrap();
+
+        (instance, device.0, graphic_queue)
     }
 
     fn get_required_extensions(library: &VulkanLibrary) -> InstanceExtensions {
@@ -79,6 +112,14 @@ impl HelloTriangleApplication {
         extensions
     }
 
+    fn get_queue_family_index(physical_device: &Arc<PhysicalDevice>) -> Option<usize> {
+        for (ii, qf) in physical_device.queue_family_properties().iter().enumerate() {
+            if qf.queue_flags.contains(QueueFlags::GRAPHICS) { return Some(ii) }
+        }
+
+        return None
+    }
+
     fn main_loop(self) {
         self.eloop.run(|event, _, flow| {
             flow.set_wait();
@@ -89,7 +130,7 @@ impl HelloTriangleApplication {
                 },
                 _ => ()
             }
-        }).unwrap();
+        });
     }
 }
 
