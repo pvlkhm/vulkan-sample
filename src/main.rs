@@ -1,21 +1,22 @@
-use std::{sync::Arc, future::Future};
+use std::{sync::Arc};
 
 use vulkano::{
     instance::{Instance, InstanceCreateInfo, InstanceExtensions},
     device::physical::PhysicalDevice,
     device::{Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags},
     VulkanLibrary,
-    swapchain::{Surface, Swapchain, SwapchainCreateInfo, ColorSpace, PresentMode, CompositeAlpha, acquire_next_image, self, SwapchainPresentInfo},
+    swapchain::{Surface, Swapchain, SwapchainCreateInfo, ColorSpace, PresentMode, CompositeAlpha, acquire_next_image, SwapchainPresentInfo},
     format::{Format, ClearValue},
     image::{ImageUsage, SwapchainImage, view::{ImageView, ImageViewCreateInfo}, ImageViewType, ImageSubresourceRange, ImageLayout, ImageAspects},
-    pipeline::{graphics::{GraphicsPipeline, input_assembly::{PrimitiveTopology, InputAssemblyState}, rasterization::{RasterizationState, PolygonMode}, color_blend::ColorBlendState, render_pass::{PipelineRenderPassType, PipelineRenderingCreateInfo}, viewport::{ViewportState, Viewport, Scissor}}, PartialStateMode}, render_pass::{Subpass, Framebuffer, FramebufferCreateInfo, RenderPass, RenderPassCreateInfo, AttachmentDescription, SubpassDescription, AttachmentReference, SubpassDependency}, command_buffer::{pool::{CommandPool, CommandPoolCreateInfo, CommandBufferAllocateInfo}, CommandBufferLevel, AutoCommandBufferBuilder, allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo}, CommandBufferUsage, RenderPassBeginInfo, SubpassContents, PrimaryAutoCommandBuffer, PrimaryCommandBufferAbstract, synced::SyncCommandBufferBuilder}, NonExhaustive, sync::{GpuFuture, PipelineStages, AccessFlags, DependencyFlags}
+    pipeline::{graphics::{GraphicsPipeline, input_assembly::{PrimitiveTopology, InputAssemblyState}, rasterization::{RasterizationState, PolygonMode}, viewport::{ViewportState, Viewport, Scissor}}, PartialStateMode}, render_pass::{Subpass, Framebuffer, FramebufferCreateInfo, RenderPass, RenderPassCreateInfo, AttachmentDescription, SubpassDescription, AttachmentReference, SubpassDependency}, command_buffer::{AutoCommandBufferBuilder, allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo}, CommandBufferUsage, RenderPassBeginInfo, SubpassContents, PrimaryAutoCommandBuffer}, sync::{GpuFuture, PipelineStages, AccessFlags}
 };
 
 use winit::{
     event_loop::EventLoop,
     window::WindowBuilder,
     dpi::LogicalSize,
-    event::{Event, WindowEvent}
+    event::{Event, WindowEvent},
+    platform::macos::WindowBuilderExtMacOS
 };
 
 use vulkano_win::VkSurfaceBuild;
@@ -39,22 +40,21 @@ mod shader_vert {
             #version 450
 
             layout(location = 0) out vec3 fragColor;
+            layout(location = 1) out vec2 rectSize;
 
-            vec2 positions[3] = vec2[](
-                vec2(0.0, -0.5),
-                vec2(0.5, 0.5),
-                vec2(-0.5, 0.5)
-            );
+            vec2 size = vec2(0.4, 0.3);
 
-            vec3 colors[3] = vec3[](
-                vec3(1.0, 0.0, 0.0),
-                vec3(1.0, 1.0, 0.0),
-                vec3(0.0, 1.0, 1.0)
+            vec2 positions[4] = vec2[](
+                vec2(size[0], -size[1]),
+                vec2(-size[0], -size[1]),
+                vec2(size[0], size[1]),
+                vec2(-size[0], size[1])
             );
 
             void main() {
                 gl_Position = vec4(positions[gl_VertexIndex], 0.0, 1.0);
-                fragColor = colors[gl_VertexIndex];
+                fragColor = vec3(0.2, 0.2, 0.2);
+                rectSize = size;
             }
         "
     }
@@ -67,11 +67,25 @@ mod shader_frag {
             #version 450
 
             layout(location = 0) in vec3 fragColor;
-
+            layout(location = 1) in vec2 rectSize;
             layout(location = 0) out vec4 outColor;
 
+            vec2 viewport    = vec2(1600, 1200);
+            vec2 origin      = viewport / 2;
+            vec2 rectSizeWin = viewport * rectSize / 2;
+            int radi         = 30;
+
             void main() {
-                outColor = vec4(fragColor, 1.0);
+                vec2 coord = abs(gl_FragCoord.xy - origin);
+                vec2 rectSizeWinRaw = rectSizeWin - radi;
+                vec2 delta = max(vec2(0,0), coord - rectSizeWinRaw);
+                float distance = length(delta);
+
+                if (distance <= radi) {
+                    outColor = vec4(fragColor, 1.0);
+                } else {
+                    outColor = vec4(0.0, 0.0, 0.0, 1.0);
+                }
             }
         "
     }
@@ -128,6 +142,8 @@ impl HelloTriangleApplication {
 
         let surface = WindowBuilder::new()
             .with_title("Vulkan")
+            .with_titlebar_transparent(true)
+            .with_fullsize_content_view(true)
             .with_inner_size(LogicalSize {width: WIDTH, height: HEIGHT})
             .build_vk_surface(&eloop, instance)
             .unwrap();
@@ -250,7 +266,7 @@ impl HelloTriangleApplication {
             .vertex_shader(shader_vert.entry_point("main").unwrap(), ())
             .fragment_shader(shader_frag.entry_point("main").unwrap(), ())
             .input_assembly_state(InputAssemblyState {
-                topology: PartialStateMode::Fixed(PrimitiveTopology::TriangleList),
+                topology: PartialStateMode::Fixed(PrimitiveTopology::TriangleStrip),
                 ..Default::default()
             })
             .viewport_state(ViewportState::Fixed {
@@ -305,7 +321,7 @@ impl HelloTriangleApplication {
                     )
                 }, SubpassContents::Inline).unwrap()
                 .bind_pipeline_graphics(pipe.clone())
-                .draw(3, 1, 0, 0).unwrap()
+                .draw(4, 1, 0, 0).unwrap()
                 .end_render_pass().unwrap();
 
             Arc::new(cb_builder.build().unwrap())
